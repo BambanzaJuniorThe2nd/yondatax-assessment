@@ -1,50 +1,65 @@
+# main.py
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timedelta
-from typing import List
-import jwt
+from typing import List, Optional, Annotated
+from jose import jwt
 from passlib.context import CryptContext
+import motor.motor_asyncio
+from bson import ObjectId
+import os
 
-# Database setup
-SQLALCHEMY_DATABASE_URL = "postgresql://user:password@localhost/wallet_db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# Models
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
-
-class Account(Base):
-    __tablename__ = "accounts"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    balance = Column(Float, default=0.0)
-
-class Transaction(Base):
-    __tablename__ = "transactions"
-    id = Column(Integer, primary_key=True, index=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"))
-    amount = Column(Float)
-    transaction_type = Column(String)  # "credit" or "debit"
-    timestamp = Column(DateTime, default=datetime.utcnow)
-
-Base.metadata.create_all(bind=engine)
+# MongoDB setup
+MONGO_DETAILS = os.getenv("MONGO_DETAILS", "mongodb://localhost:27017")
+client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_DETAILS)
+database = client.wallet_db
 
 # Pydantic models
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v):
+        if not ObjectId.is_valid(v):
+            raise ValueError("Invalid objectid")
+        return ObjectId(v)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, field_schema):
+        field_schema.update(type="string")
+
+class UserModel(BaseModel):
+    id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    username: str
+    hashed_password: str
+    
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True, json_encoders={ObjectId: str})
+
+class AccountModel(BaseModel):
+    id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    user_id: PyObjectId
+    balance: float = 0.0
+    
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True, json_encoders={ObjectId: str})
+
+class TransactionModel(BaseModel):
+    id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    account_id: PyObjectId
+    amount: float
+    transaction_type: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True, json_encoders={ObjectId: str})
+
 class UserCreate(BaseModel):
     username: str
     password: str
 
 class UserInDB(BaseModel):
-    id: int
+    id: str
     username: str
 
 class Token(BaseModel):
@@ -58,7 +73,7 @@ class TransactionCreate(BaseModel):
     amount: float
 
 class TransactionResponse(BaseModel):
-    id: int
+    id: str
     amount: float
     transaction_type: str
     timestamp: datetime
@@ -73,14 +88,6 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 # FastAPI app
 app = FastAPI(title="Wallet Application")
 
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 # Helper functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -88,9 +95,9 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-def authenticate_user(db: Session, username: str, password: str):
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.hashed_password):
+async def authenticate_user(username: str, password: str):
+    user = await database["users"].find_one({"username": username})
+    if not user or not verify_password(password, user["hashed_password"]):
         return False
     return user
 
@@ -104,7 +111,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -115,32 +122,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-    except jwt.PyJWTError:
+    except jwt.JWTError:
         raise credentials_exception
-    user = db.query(User).filter(User.username == username).first()
+    user = await database["users"].find_one({"username": username})
     if user is None:
         raise credentials_exception
     return user
 
 # API endpoints
 @app.post("/users", response_model=UserInDB)
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first()
+async def create_user(user: UserCreate):
+    db_user = await database["users"].find_one({"username": user.username})
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
     hashed_password = get_password_hash(user.password)
-    db_user = User(username=user.username, hashed_password=hashed_password)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    account = Account(user_id=db_user.id)
-    db.add(account)
-    db.commit()
-    return db_user
+    new_user = await database["users"].insert_one({"username": user.username, "hashed_password": hashed_password})
+    created_user = await database["users"].find_one({"_id": new_user.inserted_id})
+    await database["accounts"].insert_one({"user_id": new_user.inserted_id, "balance": 0.0})
+    return UserInDB(id=str(created_user["_id"]), username=created_user["username"])
 
 @app.post("/token", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await authenticate_user(form_data.username, form_data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -149,68 +152,69 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
+        data={"sub": user["username"]}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/balance", response_model=AccountBalance)
-async def get_balance(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    account = db.query(Account).filter(Account.user_id == current_user.id).first()
+async def get_balance(current_user: dict = Depends(get_current_user)):
+    account = await database["accounts"].find_one({"user_id": current_user["_id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    return {"balance": account.balance}
+    return {"balance": account["balance"]}
 
 @app.post("/credit", response_model=TransactionResponse)
 async def credit_account(
     transaction: TransactionCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: dict = Depends(get_current_user)
 ):
-    account = db.query(Account).filter(Account.user_id == current_user.id).first()
+    account = await database["accounts"].find_one({"user_id": current_user["_id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    account.balance += transaction.amount
-    new_transaction = Transaction(
-        account_id=account.id,
-        amount=transaction.amount,
-        transaction_type="credit"
+    new_balance = account["balance"] + transaction.amount
+    await database["accounts"].update_one(
+        {"_id": account["_id"]},
+        {"$set": {"balance": new_balance}}
     )
-    db.add(new_transaction)
-    db.commit()
-    db.refresh(new_transaction)
-    return new_transaction
+    new_transaction = await database["transactions"].insert_one({
+        "account_id": account["_id"],
+        "amount": transaction.amount,
+        "transaction_type": "credit",
+        "timestamp": datetime.utcnow()
+    })
+    created_transaction = await database["transactions"].find_one({"_id": new_transaction.inserted_id})
+    return created_transaction
 
 @app.post("/debit", response_model=TransactionResponse)
 async def debit_account(
     transaction: TransactionCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: dict = Depends(get_current_user)
 ):
-    account = db.query(Account).filter(Account.user_id == current_user.id).first()
+    account = await database["accounts"].find_one({"user_id": current_user["_id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if account.balance < transaction.amount:
+    if account["balance"] < transaction.amount:
         raise HTTPException(status_code=400, detail="Insufficient funds")
-    account.balance -= transaction.amount
-    new_transaction = Transaction(
-        account_id=account.id,
-        amount=transaction.amount,
-        transaction_type="debit"
+    new_balance = account["balance"] - transaction.amount
+    await database["accounts"].update_one(
+        {"_id": account["_id"]},
+        {"$set": {"balance": new_balance}}
     )
-    db.add(new_transaction)
-    db.commit()
-    db.refresh(new_transaction)
-    return new_transaction
+    new_transaction = await database["transactions"].insert_one({
+        "account_id": account["_id"],
+        "amount": transaction.amount,
+        "transaction_type": "debit",
+        "timestamp": datetime.utcnow()
+    })
+    created_transaction = await database["transactions"].find_one({"_id": new_transaction.inserted_id})
+    return created_transaction
 
 @app.get("/transactions", response_model=List[TransactionResponse])
-async def get_transactions(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    account = db.query(Account).filter(Account.user_id == current_user.id).first()
+async def get_transactions(current_user: dict = Depends(get_current_user)):
+    account = await database["accounts"].find_one({"user_id": current_user["_id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    transactions = db.query(Transaction).filter(Transaction.account_id == account.id).all()
+    transactions = await database["transactions"].find({"account_id": account["_id"]}).to_list(1000)
     return transactions
 
 if __name__ == "__main__":
