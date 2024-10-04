@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, ConfigDict
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated
 from jose import jwt
 from passlib.context import CryptContext
@@ -17,14 +17,13 @@ MONGO_DETAILS = os.getenv("MONGO_DETAILS", "mongodb://localhost:27017")
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_DETAILS)
 database = client.yondatax_db
 
-# Pydantic models
 class PyObjectId(ObjectId):
     @classmethod
     def __get_validators__(cls):
         yield cls.validate
 
     @classmethod
-    def validate(cls, v):
+    def validate(cls, v, info):
         if not ObjectId.is_valid(v):
             raise ValueError("Invalid objectid")
         return ObjectId(v)
@@ -85,11 +84,17 @@ class TransactionCreate(BaseModel):
     amount: float
 
 class TransactionResponse(BaseModel):
-    id: str
-    wallet_id: str
+    id: PyObjectId = Field(alias="_id")
+    wallet_id: PyObjectId
     amount: float
     transaction_type: TransactionType
     timestamp: datetime
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+        from_attributes = True
 
 class WalletCreate(BaseModel):
     currency: Currency
@@ -182,15 +187,21 @@ async def get_user_account(user_id: ObjectId):
     return account
 
 async def get_exchange_rate(from_currency: str, to_currency: str) -> float:
-    api_key = os.getenv("EXCHANGE_RATE_API_KEY")
-    url = f"https://v6.exchangerate-api.com/v6/{api_key}/pair/{from_currency}/{to_currency}"
+    api_key = "cd11219ba9bf8874e7acc599"
+    url = f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{from_currency}"
+    
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
         data = response.json()
+        
         if data["result"] == "success":
-            return data["conversion_rate"]
+            conversion_rates = data["conversion_rates"]
+            if to_currency in conversion_rates:
+                return conversion_rates[to_currency]
+            else:
+                raise HTTPException(status_code=400, detail=f"Currency {to_currency} not found in conversion rates")
         else:
-            raise HTTPException(status_code=400, detail="Failed to fetch exchange rate")
+            raise HTTPException(status_code=400, detail="Failed to fetch exchange rates")
         
 async def get_wallet(wallet_id: str, user_id: ObjectId):
     wallet = await database["wallets"].find_one({"_id": ObjectId(wallet_id), "user_id": user_id})
@@ -437,6 +448,7 @@ async def transfer_between_wallets(
     )
     
     source_transaction = await database["transactions"].find_one({"_id": source_transaction_id})
+    
     return TransactionResponse(**source_transaction)
 
 @app.get("/wallets/{wallet_id}/balance", response_model=AccountBalance)
