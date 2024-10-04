@@ -1,16 +1,16 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field, ConfigDict
+import os
 from datetime import datetime, timedelta
-from typing import List, Optional, Annotated
-from jose import jwt
-from passlib.context import CryptContext
+from enum import Enum
+from typing import Annotated, List, Optional
+
+import httpx
 import motor.motor_asyncio
 from bson import ObjectId
-from enum import Enum
-import os
-import httpx
-
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel, ConfigDict, Field
 
 # MongoDB setup
 MONGO_DETAILS = os.getenv("MONGO_DETAILS", "mongodb://localhost:27017")
