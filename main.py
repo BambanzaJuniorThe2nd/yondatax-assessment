@@ -183,7 +183,14 @@ async def credit_account(
         "timestamp": datetime.utcnow()
     })
     created_transaction = await database["transactions"].find_one({"_id": new_transaction.inserted_id})
-    return created_transaction
+    
+    # Format the response according to TransactionResponse model
+    return TransactionResponse(
+        id=str(created_transaction["_id"]),
+        amount=created_transaction["amount"],
+        transaction_type=created_transaction["transaction_type"],
+        timestamp=created_transaction["timestamp"]
+    )
 
 @app.post("/debit", response_model=TransactionResponse)
 async def debit_account(
@@ -207,7 +214,14 @@ async def debit_account(
         "timestamp": datetime.utcnow()
     })
     created_transaction = await database["transactions"].find_one({"_id": new_transaction.inserted_id})
-    return created_transaction
+    
+    # Format the response according to TransactionResponse model
+    return TransactionResponse(
+        id=str(created_transaction["_id"]),
+        amount=created_transaction["amount"],
+        transaction_type=created_transaction["transaction_type"],
+        timestamp=created_transaction["timestamp"]
+    )
 
 @app.get("/transactions", response_model=List[TransactionResponse])
 async def get_transactions(current_user: dict = Depends(get_current_user)):
@@ -215,7 +229,14 @@ async def get_transactions(current_user: dict = Depends(get_current_user)):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     transactions = await database["transactions"].find({"account_id": account["_id"]}).to_list(1000)
-    return transactions
+    return [
+        TransactionResponse(
+            id=str(t["_id"]),
+            amount=t["amount"],
+            transaction_type=t["transaction_type"],
+            timestamp=t["timestamp"]
+        ) for t in transactions
+    ]
 
 if __name__ == "__main__":
     import uvicorn
