@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Annotated, List, Optional, Union
@@ -6,15 +7,13 @@ from typing import Annotated, List, Optional, Union
 import httpx
 import motor.motor_asyncio
 from bson import ObjectId
-from fastapi import Depends, FastAPI, HTTPException, status, Request, Header
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.openapi.utils import get_openapi
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, Field, GetJsonSchemaHandler
 from pydantic_core import core_schema
-from contextlib import asynccontextmanager
-from typing import Optional
 
 # MongoDB setup
 MONGO_DETAILS = os.getenv("MONGO_DETAILS", "mongodb://localhost:27017")
@@ -52,26 +51,18 @@ class UserRole(str, Enum):
 
 
 class UserModel(BaseModel):
-    # id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     username: str
     hashed_password: str
     role: str = UserRole.USER  # Default role is 'user'
 
-    # model_config = ConfigDict(
-    #     populate_by_name=True,
-    #     arbitrary_types_allowed=True,
-    #     json_encoders={ObjectId: str},
-    # )
-
     class Config:
         json_encoders = {ObjectId: str}
-        arbitrary_types_allowed=True,
+        arbitrary_types_allowed = (True,)
         populate_by_name = True
 
 
 class AccountModel(BaseModel):
-    # id: Optional[PyObjectId] = Field(alias="_id")
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     user_id: PyObjectId
     wallets: List[PyObjectId] = []
@@ -82,22 +73,15 @@ class AccountModel(BaseModel):
 
 
 class TransactionModel(BaseModel):
-    # id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     account_id: PyObjectId
     amount: float
     transaction_type: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    # model_config = ConfigDict(
-    #     populate_by_name=True,
-    #     arbitrary_types_allowed=True,
-    #     json_encoders={ObjectId: str},
-    # )
-
     class Config:
         json_encoders = {ObjectId: str}
-        arbitrary_types_allowed=True,
+        arbitrary_types_allowed = (True,)
         populate_by_name = True
 
 
@@ -150,7 +134,6 @@ class TransactionDebit(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-    # id: PyObjectId = Field(alias="_id")
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     wallet_id: PyObjectId
     amount: float
@@ -261,8 +244,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 # Helper function to conditionally fetch current user
 async def get_current_user_if_needed(
-    request: Request, 
-    authorization: str = Header(None)
+    request: Request, authorization: str = Header(None)
 ) -> Optional[dict]:
     if authorization:
         return await get_current_user(authorization)
@@ -336,11 +318,12 @@ async def create_transaction(
     result = await database["transactions"].insert_one(transaction)
     return result.inserted_id
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create admin user if no users exist
     user_count = await database["users"].count_documents({})
-    
+
     if user_count == 0:
         admin_username = "testadmin"
         admin_password = "adminpassword"
@@ -355,17 +338,22 @@ async def lifespan(app: FastAPI):
                 "created_at": datetime.utcnow(),
             }
         )
-        print(f"Admin user created with username: {admin_username} and password: {admin_password}")
-    
+        print(
+            f"Admin user created with username: {admin_username} and password: {admin_password}"
+        )
+
     # Yield control back to FastAPI (app lifecycle continues)
     yield
+
 
 # FastAPI app
 app = FastAPI(lifespan=lifespan)
 
+
 @app.get("/items/{item_id}")
 async def read_item(item_id: int, q: Union[str, None] = None):
     return {"item_id": item_id, "q": q}
+
 
 # Customize OpenAPI schema to show up in Swagger UI
 def custom_openapi():
@@ -383,10 +371,12 @@ def custom_openapi():
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
+
 # Assign the custom OpenAPI schema to the app
 app.openapi = custom_openapi
 
 # API endpoints
+
 
 @app.get("/currencies", response_model=List[Currency])
 async def list_currencies():
@@ -401,8 +391,10 @@ async def list_currencies():
 
 @app.post("/users", response_model=UserInDB)
 async def create_user(
-    user: UserCreate, 
-    current_user: Optional[dict] = Depends(get_current_user_if_needed)  # Fetch user only if needed
+    user: UserCreate,
+    current_user: Optional[dict] = Depends(
+        get_current_user_if_needed
+    ),  # Fetch user only if needed
 ):
     """
     Create a new user.
@@ -420,11 +412,13 @@ async def create_user(
     db_user = await database["users"].find_one({"username": user.username})
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-    
+
     # Conditionally check for admin role creation
     if user.role == UserRole.ADMIN:
         if current_user is None or current_user["role"] != UserRole.ADMIN.value:
-            raise HTTPException(status_code=403, detail="Only admins can create other admins")
+            raise HTTPException(
+                status_code=403, detail="Only admins can create other admins"
+            )
 
     hashed_password = get_password_hash(user.password)
 
