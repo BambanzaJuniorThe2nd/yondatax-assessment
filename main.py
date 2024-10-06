@@ -11,6 +11,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, Field
+from contextlib import asynccontextmanager
 
 # MongoDB setup
 MONGO_DETAILS = os.getenv("MONGO_DETAILS", "mongodb://localhost:27017")
@@ -161,9 +162,6 @@ SECRET_KEY = "your-secret-key"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# FastAPI app
-app = FastAPI(title="Wallet Application")
-
 # Helper functions
 
 
@@ -296,6 +294,33 @@ async def create_transaction(
     }
     result = await database["transactions"].insert_one(transaction)
     return result.inserted_id
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create admin user if no users exist
+    user_count = await database["users"].count_documents({})
+    
+    if user_count == 0:
+        admin_username = "testadmin"
+        admin_password = "adminpassword"
+        hashed_password = get_password_hash(admin_password)
+
+        # Insert the admin user into the users collection
+        await database["users"].insert_one(
+            {
+                "username": admin_username,
+                "hashed_password": hashed_password,
+                "role": UserRole.ADMIN.value,  # Admin role
+                "created_at": datetime.utcnow(),
+            }
+        )
+        print(f"Admin user created with username: {admin_username} and password: {admin_password}")
+    
+    # Yield control back to FastAPI (app lifecycle continues)
+    yield
+
+# FastAPI app
+app = FastAPI(lifespan=lifespan)
 
 
 # API endpoints
