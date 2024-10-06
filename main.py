@@ -6,12 +6,13 @@ from typing import Annotated, List, Optional
 import httpx
 import motor.motor_asyncio
 from bson import ObjectId
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status, Request, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, Field
 from contextlib import asynccontextmanager
+from typing import Optional
 
 # MongoDB setup
 MONGO_DETAILS = os.getenv("MONGO_DETAILS", "mongodb://localhost:27017")
@@ -208,6 +209,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     user = await database["users"].find_one({"username": username})
     if user is None:
         raise credentials_exception
+    elif user["role"] == UserRole.ADMIN.value:
+        return user
 
     # Ensure the user has an account and at least one wallet
     account = await get_user_account(user["_id"])
@@ -226,6 +229,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         )
 
     return user
+
+
+# Helper function to conditionally fetch current user
+async def get_current_user_if_needed(
+    request: Request, 
+    authorization: str = Header(None)
+) -> Optional[dict]:
+    if authorization:
+        return await get_current_user(authorization)
+    return None
 
 
 async def get_user_account(user_id: ObjectId):
@@ -332,10 +345,18 @@ async def list_currencies():
 
 
 @app.post("/users", response_model=UserInDB)
-async def create_user(user: UserCreate):
+async def create_user(
+    user: UserCreate, 
+    current_user: Optional[dict] = Depends(get_current_user_if_needed)  # Fetch user only if needed
+):
     db_user = await database["users"].find_one({"username": user.username})
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
+    
+    # Conditionally check for admin role creation
+    if user.role == UserRole.ADMIN:
+        if current_user is None or current_user["role"] != UserRole.ADMIN.value:
+            raise HTTPException(status_code=403, detail="Only admins can create other admins")
 
     hashed_password = get_password_hash(user.password)
 
