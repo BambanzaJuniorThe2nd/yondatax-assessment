@@ -1,16 +1,18 @@
 import os
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Optional, Union
 
 import httpx
 import motor.motor_asyncio
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException, status, Request, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.openapi.utils import get_openapi
 from jose import jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, GetJsonSchemaHandler
+from pydantic_core import core_schema
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -32,8 +34,16 @@ class PyObjectId(ObjectId):
         return ObjectId(v)
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, field_schema):
-        field_schema.update(type="string")
+    def __get_pydantic_core_schema__(cls, _source_type, _handler):
+        return core_schema.with_info_after_validator_function(
+            cls.validate,
+            core_schema.str_schema(),
+            serialization=core_schema.plain_serializer_function_ser_schema(str),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _schema, handler: GetJsonSchemaHandler):
+        return handler(core_schema.str_schema())
 
 
 class UserRole(str, Enum):
@@ -42,36 +52,53 @@ class UserRole(str, Enum):
 
 
 class UserModel(BaseModel):
-    id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    # id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     username: str
     hashed_password: str
     role: str = UserRole.USER  # Default role is 'user'
 
-    model_config = ConfigDict(
-        populate_by_name=True,
+    # model_config = ConfigDict(
+    #     populate_by_name=True,
+    #     arbitrary_types_allowed=True,
+    #     json_encoders={ObjectId: str},
+    # )
+
+    class Config:
+        json_encoders = {ObjectId: str}
         arbitrary_types_allowed=True,
-        json_encoders={ObjectId: str},
-    )
+        populate_by_name = True
 
 
 class AccountModel(BaseModel):
-    id: Optional[PyObjectId] = Field(alias="_id")
+    # id: Optional[PyObjectId] = Field(alias="_id")
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     user_id: PyObjectId
     wallets: List[PyObjectId] = []
 
+    class Config:
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
 
 class TransactionModel(BaseModel):
-    id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    # id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     account_id: PyObjectId
     amount: float
     transaction_type: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    model_config = ConfigDict(
-        populate_by_name=True,
+    # model_config = ConfigDict(
+    #     populate_by_name=True,
+    #     arbitrary_types_allowed=True,
+    #     json_encoders={ObjectId: str},
+    # )
+
+    class Config:
+        json_encoders = {ObjectId: str}
         arbitrary_types_allowed=True,
-        json_encoders={ObjectId: str},
-    )
+        populate_by_name = True
 
 
 class Currency(str, Enum):
@@ -123,7 +150,8 @@ class TransactionDebit(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-    id: PyObjectId = Field(alias="_id")
+    # id: PyObjectId = Field(alias="_id")
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     wallet_id: PyObjectId
     amount: float
     transaction_type: TransactionType
@@ -335,12 +363,39 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 app = FastAPI(lifespan=lifespan)
 
+@app.get("/items/{item_id}")
+async def read_item(item_id: int, q: Union[str, None] = None):
+    return {"item_id": item_id, "q": q}
+
+# Customize OpenAPI schema to show up in Swagger UI
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="YondaTax API",
+        version="1.0.0",
+        description="API for managing digital wallets and transactions",
+        routes=app.routes,
+    )
+    openapi_schema["info"]["x-logo"] = {
+        "url": "https://fastapi.tiangolo.com/img/logo-margin/logo-teal.png"
+    }
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+# Assign the custom OpenAPI schema to the app
+app.openapi = custom_openapi
 
 # API endpoints
 
-
 @app.get("/currencies", response_model=List[Currency])
 async def list_currencies():
+    """
+    Retrieve a list of supported currencies.
+
+    Returns:
+    - **List[Currency]**: A list of supported currency codes.
+    """
     return list(Currency)
 
 
@@ -349,6 +404,19 @@ async def create_user(
     user: UserCreate, 
     current_user: Optional[dict] = Depends(get_current_user_if_needed)  # Fetch user only if needed
 ):
+    """
+    Create a new user.
+
+    - **user**: The user details to create.
+    - **current_user**: The authenticated user (if provided). Only required for admin operations.
+
+    Returns:
+    - **UserInDB**: The created user's details.
+
+    Raises:
+    - **400 Bad Request**: If the username is already registered.
+    - **403 Forbidden**: If trying to create an admin user without admin privileges.
+    """
     db_user = await database["users"].find_one({"username": user.username})
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
@@ -397,6 +465,17 @@ async def create_user(
 
 @app.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Authenticate a user and return an access token.
+
+    - **form_data**: The username and password for authentication.
+
+    Returns:
+    - **Token**: An access token for the authenticated user.
+
+    Raises:
+    - **401 Unauthorized**: If the username or password is incorrect.
+    """
     user = await authenticate_user(form_data.username, form_data.password)
     if not user:
         raise HTTPException(
@@ -415,6 +494,19 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 async def create_wallet(
     wallet: WalletCreate, current_user: dict = Depends(get_current_user)
 ):
+    """
+    Create a new wallet for the authenticated user.
+
+    - **wallet**: The wallet details to create
+    - **current_user**: The authenticated user (automatically injected)
+
+    Returns:
+    - **WalletResponse**: The created wallet details
+
+    Raises:
+    - **400 Bad Request**: If a wallet with the specified currency already exists
+    - **401 Unauthorized**: If the user is not authenticated
+    """
     # Check if the user already has a wallet with the specified currency
     existing_wallet = await database["wallets"].find_one(
         {"user_id": current_user["_id"], "currency": wallet.currency}
@@ -449,6 +541,14 @@ async def create_wallet(
 
 @app.get("/wallets", response_model=List[WalletResponse])
 async def get_wallets(current_user: dict = Depends(get_current_user)):
+    """
+    Retrieve all wallets for the authenticated user.
+
+    - **current_user**: The authenticated user (automatically injected).
+
+    Returns:
+    - **List[WalletResponse]**: A list of wallet details for the user.
+    """
     user_wallets = (
         await database["wallets"].find({"user_id": current_user["_id"]}).to_list(None)
     )
@@ -468,6 +568,20 @@ async def update_wallet(
     wallet_update: WalletUpdate,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Update a specific wallet for the authenticated user.
+
+    - **wallet_id**: The ID of the wallet to update.
+    - **wallet_update**: The wallet details to update.
+    - **current_user**: The authenticated user (automatically injected).
+
+    Returns:
+    - **WalletResponse**: The updated wallet details.
+
+    Raises:
+    - **400 Bad Request**: If the wallet update fails.
+    - **404 Not Found**: If the wallet is not found.
+    """
     wallet = await get_wallet(wallet_id, current_user["_id"])
 
     update_data = wallet_update.dict(exclude_unset=True)
@@ -488,6 +602,21 @@ async def credit_wallet(
     transaction: TransactionCredit,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Credit (add funds to) a specific wallet. Only accessible by admin users.
+
+    - **wallet_id**: The ID of the wallet to credit.
+    - **transaction**: The credit transaction details.
+    - **current_user**: The authenticated admin user (automatically injected).
+
+    Returns:
+    - **TransactionResponse**: The details of the credit transaction.
+
+    Raises:
+    - **400 Bad Request**: If the wallet balance update fails.
+    - **403 Forbidden**: If the user is not an admin.
+    - **404 Not Found**: If the wallet is not found.
+    """
     await is_admin_user(current_user)  # Ensure the user is an admin
     wallet = await get_wallet(wallet_id, ObjectId(transaction.user_id))
 
@@ -527,6 +656,21 @@ async def debit_wallet(
     transaction: TransactionDebit,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Debit (remove funds from) a specific wallet. Only accessible by admin users.
+
+    - **wallet_id**: The ID of the wallet to debit.
+    - **transaction**: The debit transaction details.
+    - **current_user**: The authenticated admin user (automatically injected).
+
+    Returns:
+    - **TransactionResponse**: The details of the debit transaction.
+
+    Raises:
+    - **400 Bad Request**: If there are insufficient funds or the wallet balance update fails.
+    - **403 Forbidden**: If the user is not an admin.
+    - **404 Not Found**: If the wallet is not found.
+    """
     await is_admin_user(current_user)  # Ensure the user is an admin
     wallet = await get_wallet(wallet_id, ObjectId(transaction.user_id))
 
@@ -567,6 +711,19 @@ async def debit_wallet(
 async def transfer_between_wallets(
     transfer: TransferRequest, current_user: dict = Depends(get_current_user)
 ):
+    """
+    Transfer funds between two wallets owned by the authenticated user.
+
+    - **transfer**: The transfer details, including source and target wallet IDs and amount.
+    - **current_user**: The authenticated user (automatically injected).
+
+    Returns:
+    - **TransactionResponse**: The details of the transfer transaction.
+
+    Raises:
+    - **400 Bad Request**: If there are insufficient funds in the source wallet.
+    - **404 Not Found**: If either the source or target wallet is not found.
+    """
     source_wallet = await get_wallet(transfer.source_wallet_id, current_user["_id"])
     target_wallet = await get_wallet(transfer.target_wallet_id, current_user["_id"])
 
@@ -621,6 +778,18 @@ async def transfer_between_wallets(
 async def get_wallet_balance(
     wallet_id: str, current_user: dict = Depends(get_current_user)
 ):
+    """
+    Retrieve the current balance of a specific wallet.
+
+    - **wallet_id**: The ID of the wallet to check.
+    - **current_user**: The authenticated user (automatically injected).
+
+    Returns:
+    - **AccountBalance**: The current balance of the wallet.
+
+    Raises:
+    - **404 Not Found**: If the wallet is not found.
+    """
     wallet = await get_wallet(wallet_id, current_user["_id"])
     return AccountBalance(balance=wallet["balance"])
 
@@ -632,6 +801,20 @@ async def get_wallet_transactions(
     limit: int = 100,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Retrieve a list of transactions for a specific wallet.
+
+    - **wallet_id**: The ID of the wallet to get transactions for.
+    - **skip**: The number of transactions to skip (for pagination).
+    - **limit**: The maximum number of transactions to return (for pagination).
+    - **current_user**: The authenticated user (automatically injected).
+
+    Returns:
+    - **List[TransactionResponse]**: A list of transaction details for the wallet.
+
+    Raises:
+    - **404 Not Found**: If the wallet is not found.
+    """
     wallet = await get_wallet(wallet_id, current_user["_id"])
 
     transactions = (
@@ -657,6 +840,18 @@ async def get_wallet_transactions(
 
 @app.get("/user/summary", response_model=dict)
 async def get_user_summary(current_user: dict = Depends(get_current_user)):
+    """
+    Retrieve a summary of the authenticated user's account, including total balance,
+    wallet count, and recent transactions.
+
+    - **current_user**: The authenticated user (automatically injected).
+
+    Returns:
+    - **dict**: A dictionary containing:
+        - total_balance: The sum of balances across all user's wallets.
+        - wallet_count: The number of wallets owned by the user.
+        - recent_transactions: A list of the user's most recent transactions.
+    """
     user_wallets = (
         await database["wallets"].find({"user_id": current_user["_id"]}).to_list(None)
     )
