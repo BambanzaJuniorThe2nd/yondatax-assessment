@@ -34,10 +34,16 @@ class PyObjectId(ObjectId):
         field_schema.update(type="string")
 
 
+class UserRole(str, Enum):
+    USER = "user"
+    ADMIN = "admin"
+
+
 class UserModel(BaseModel):
     id: Optional[Annotated[PyObjectId, Field(alias="_id")]] = None
     username: str
     hashed_password: str
+    role: str = UserRole.USER  # Default role is 'user'
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -77,6 +83,7 @@ class UserCreate(BaseModel):
     username: str
     password: str
     default_currency: Currency = Currency.ZAR
+    role: UserRole = UserRole.USER  # Default to regular user unless specified
 
 
 class UserInDB(BaseModel):
@@ -100,6 +107,16 @@ class TransactionType(str, Enum):
 
 
 class TransactionCreate(BaseModel):
+    amount: float
+
+
+class TransactionCredit(BaseModel):
+    user_id: str
+    amount: float
+
+
+class TransactionDebit(BaseModel):
+    user_id: str
     amount: float
 
 
@@ -243,6 +260,14 @@ async def get_exchange_rate(from_currency: str, to_currency: str) -> float:
             )
 
 
+async def is_admin_user(current_user: dict):
+    if current_user["role"] != UserRole.ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action",
+        )
+
+
 async def get_wallet(wallet_id: str, user_id: ObjectId):
     wallet = await database["wallets"].find_one(
         {"_id": ObjectId(wallet_id), "user_id": user_id}
@@ -294,6 +319,7 @@ async def create_user(user: UserCreate):
         {
             "username": user.username,
             "hashed_password": hashed_password,
+            "role": user.role.value,  # Store the enum value in the database
             "created_at": datetime.utcnow(),
         }
     )
@@ -413,10 +439,11 @@ async def update_wallet(
 @app.post("/wallets/{wallet_id}/credit", response_model=TransactionResponse)
 async def credit_wallet(
     wallet_id: str,
-    transaction: TransactionCreate,
+    transaction: TransactionCredit,
     current_user: dict = Depends(get_current_user),
 ):
-    wallet = await get_wallet(wallet_id, current_user["_id"])
+    await is_admin_user(current_user)  # Ensure the user is an admin
+    wallet = await get_wallet(wallet_id, ObjectId(transaction.user_id))
 
     # Update wallet balance
     new_balance = wallet["balance"] + transaction.amount
@@ -451,10 +478,11 @@ async def credit_wallet(
 @app.post("/wallets/{wallet_id}/debit", response_model=TransactionResponse)
 async def debit_wallet(
     wallet_id: str,
-    transaction: TransactionCreate,
+    transaction: TransactionDebit,
     current_user: dict = Depends(get_current_user),
 ):
-    wallet = await get_wallet(wallet_id, current_user["_id"])
+    await is_admin_user(current_user)  # Ensure the user is an admin
+    wallet = await get_wallet(wallet_id, ObjectId(transaction.user_id))
 
     if wallet["balance"] < transaction.amount:
         raise HTTPException(status_code=400, detail="Insufficient funds")
