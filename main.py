@@ -771,7 +771,13 @@ async def transfer_between_wallets(
         {"_id": source_transaction_id}
     )
 
-    return TransactionResponse(**source_transaction)
+    return TransactionResponse(
+        id=str(source_transaction["_id"]),
+        wallet_id=str(source_transaction["wallet_id"]),
+        amount=source_transaction["amount"],
+        transaction_type=source_transaction["transaction_type"],
+        timestamp=source_transaction["timestamp"],
+    )
 
 
 @app.get("/wallets/{wallet_id}/balance", response_model=AccountBalance)
