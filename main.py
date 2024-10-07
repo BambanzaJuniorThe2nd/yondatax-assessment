@@ -1,21 +1,21 @@
 import os
-import redis
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Annotated, List, Optional, Union
+from typing import List, Optional, Union
 
 import httpx
 import motor.motor_asyncio
+import redis
 from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel, ConfigDict, Field, GetJsonSchemaHandler
+from pydantic import BaseModel, Field, GetJsonSchemaHandler
 from pydantic_core import core_schema
 
 # MongoDB setup
@@ -46,9 +46,10 @@ class PyObjectId(ObjectId):
     @classmethod
     def __get_pydantic_json_schema__(cls, _schema, handler: GetJsonSchemaHandler):
         return handler(core_schema.str_schema())
-    
+
+
 # Redis setup
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+redis_client = redis.Redis(host="localhost", port=6379, db=0)
 
 
 # Models
@@ -205,10 +206,9 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({
-        "jti": str(uuid.uuid4()),  # Generate a unique identifier
-        "exp": expire
-    })
+    to_encode.update(
+        {"jti": str(uuid.uuid4()), "exp": expire}  # Generate a unique identifier
+    )
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -229,7 +229,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         # Check if the token's JTI is blacklisted in Redis
         if redis_client.get(f"blacklist:{jti}") is not None:
             raise HTTPException(status_code=401, detail="Token has been revoked")
-        
+
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -507,43 +507,44 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 async def logout(authorization: str = Header(None)):
     """
     Logout the current user by invalidating their access token.
-    
+
     Args:
         authorization (str): The authorization header containing the access token.
-    
+
     Returns:
         dict: A message indicating the user has been successfully logged out.
-    
+
     Raises:
         HTTPException: If the provided access token is invalid or missing.
     """
     if authorization is None:
         raise HTTPException(status_code=400, detail="Authorization header is missing")
-    
+
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=400, detail="Authorization header must start with 'Bearer '")
-    
+        raise HTTPException(
+            status_code=400, detail="Authorization header must start with 'Bearer '"
+        )
+
     try:
         token = authorization.split(" ")[1]
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        
+
         # Check if 'jti' exists in the token payload
-        if 'jti' not in payload:
+        if "jti" not in payload:
             raise HTTPException(status_code=400, detail="Token is missing 'jti'")
-        
+
         jti = payload["jti"]
         exp = payload["exp"]
-        
+
         # Blacklist the token until its expiration
         redis_client.setex(f"blacklist:{jti}", exp - int(time.time()), "true")
         return {"message": "Successfully logged out"}
-    
+
     except JWTError:
         raise HTTPException(status_code=400, detail="Invalid token")
-    
+
     except IndexError:
         raise HTTPException(status_code=400, detail="Authorization token is malformed")
-
 
 
 @app.post("/wallets", response_model=WalletResponse)
@@ -638,7 +639,7 @@ async def update_wallet(
     - **400 Bad Request**: If the wallet update fails.
     - **404 Not Found**: If the wallet is not found.
     """
-    wallet = await get_wallet(wallet_id, current_user["_id"])
+    await get_wallet(wallet_id, current_user["_id"])
 
     update_data = wallet_update.dict(exclude_unset=True)
     if update_data:
@@ -877,7 +878,7 @@ async def get_wallet_transactions(
     Raises:
     - **404 Not Found**: If the wallet is not found.
     """
-    wallet = await get_wallet(wallet_id, current_user["_id"])
+    await get_wallet(wallet_id, current_user["_id"])
 
     transactions = (
         await database["transactions"]
