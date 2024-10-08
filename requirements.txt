@@ -7,3 +7,6 @@ passlib[bcrypt]
 pymongo
 motor
 redis
+httpx
+python-dotenv
+python-multipart
