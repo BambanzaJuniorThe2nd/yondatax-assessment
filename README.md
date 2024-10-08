@@ -25,8 +25,8 @@ YondaTax API is a FastAPI-based application that manages digital wallets and tra
 
 1. Clone the repository:
 ```
-git clone https://github.com/BambanzaJuniorThe2nd/yondatax-api.git
-cd yondatax-api
+git clone https://github.com/BambanzaJuniorThe2nd/yondatax-assessment.git
+cd yondatax-assessment
 ```
 
 2. Create a virtual environment and activate it:
