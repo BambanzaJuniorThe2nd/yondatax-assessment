@@ -10,6 +10,7 @@ import httpx
 import motor.motor_asyncio
 import redis
 from bson import ObjectId
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -17,7 +18,6 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field, GetJsonSchemaHandler
 from pydantic_core import core_schema
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -52,12 +52,14 @@ class PyObjectId(ObjectId):
 
 
 # Load environment variables for Redis configuration
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')  # Default to 'localhost'
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))    # Default to 6379
-REDIS_DB = int(os.getenv('REDIS_DB', 0))           # Default to database 0
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")  # Default to 'localhost'
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))  # Default to 6379
+REDIS_DB = int(os.getenv("REDIS_DB", 0))  # Default to database 0
 
 # Create Redis client
-redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+redis_client = redis.StrictRedis(
+    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+)
 
 
 # Models
@@ -186,14 +188,15 @@ class TransferRequest(BaseModel):
 # Security
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-# SECRET_KEY = "your-secret-key"
-# ALGORITHM = "HS256"
-# ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Load environment variables for JWT configuration
-SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'default-secret-key')  # Replace with a secure secret key
-ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')                 # Default to HS256
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRE_MINUTES', 30))  # Default to 30 minutes
+SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY", "default-secret-key"
+)  # Replace with a secure secret key
+ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")  # Default to HS256
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 30)
+)  # Default to 30 minutes
 
 # Helper functions
 
@@ -291,7 +294,7 @@ async def get_user_account(user_id: ObjectId):
 
 
 async def get_exchange_rate(from_currency: str, to_currency: str) -> float:
-    api_key = os.getenv('EXCHANGE_RATE_API_KEY')
+    api_key = os.getenv("EXCHANGE_RATE_API_KEY")
     url = f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{from_currency}"
 
     async with httpx.AsyncClient() as client:
@@ -357,8 +360,8 @@ async def lifespan(app: FastAPI):
     user_count = await database["users"].count_documents({})
 
     if user_count == 0:
-        admin_username = os.getenv('TEST_ADMIN_USERNAME', "testadmin")
-        admin_password = os.getenv('TEST_ADMIN_PASSWORD', "adminpassword")
+        admin_username = os.getenv("TEST_ADMIN_USERNAME", "testadmin")
+        admin_password = os.getenv("TEST_ADMIN_PASSWORD", "adminpassword")
         hashed_password = get_password_hash(admin_password)
 
         # Insert the admin user into the users collection
