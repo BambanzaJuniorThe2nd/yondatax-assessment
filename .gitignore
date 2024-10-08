@@ -122,4 +122,4 @@ data/db/
 
 # Ignore all .env files except .env.example
 .env*
-!.env.exampl
+!.env.example
