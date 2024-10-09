@@ -385,11 +385,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/items/{item_id}")
-async def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
-
-
 # Customize OpenAPI schema to show up in Swagger UI
 def custom_openapi():
     if app.openapi_schema:
