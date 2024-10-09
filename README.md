@@ -55,7 +55,7 @@ EXCHANGE_RATE_API_KEY=your_api_key
 
 ## Running the Application without Docker
 
-To run the application locally, first make sure your mongodb community server and redis are started, then run the following command:
+To run the application locally, first make sure your mongodb community server and redis are running, then execute the following command:
 
 `uvicorn app.main:app --reload`
 
@@ -76,3 +76,9 @@ Once the application is running, you can access the interactive API documentatio
 
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
+
+## Areas for improvement
+
+- Application architecture: Due to time constraints, the separation of concerns such as business logic and data access logic could not be fully implemented. This would have made the application more scalable and maintainable.
+
+- Funds transfer between wallets: The endpoint `{{base_url}}/wallets/{{wallet_id}}/transfer` behind this feature and functionality requires three data points in its body, namely `source_wallet_id`, `target_wallet_id`, and `amount`. The first data point is redundant, as `wallet_id` can be used to identity the source wallet.
